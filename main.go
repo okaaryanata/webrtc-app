@@ -3,79 +3,71 @@ package main
 import (
 	"log"
 	"net/http"
-	"sync"
 
 	"github.com/gorilla/websocket"
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
+	CheckOrigin: func(r *http.Request) bool {
+		return true
+	},
 }
 
-type client struct {
-	conn *websocket.Conn
-	send chan []byte
+// limit 2 peers
+var peers = make([]*websocket.Conn, 0, 2)
+
+func main() {
+	http.HandleFunc("/", serveHome)
+	http.HandleFunc("/ws", handleWebSocket)
+
+	addr := ":8080"
+	log.Printf("Server started at %s\n", addr)
+	log.Fatal(http.ListenAndServe(addr, nil))
 }
 
-var (
-	clients   = make(map[*client]bool)
-	broadcast = make(chan []byte)
-	lock      sync.Mutex
-)
+func serveHome(w http.ResponseWriter, r *http.Request) {
+	http.ServeFile(w, r, "./static/index.html")
+}
 
-func handleConnections(w http.ResponseWriter, r *http.Request) {
+func handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Println("WebSocket Upgrade:", err)
+		log.Println("WebSocket upgrade error:", err)
 		return
 	}
 	defer conn.Close()
 
-	c := &client{conn: conn, send: make(chan []byte)}
-	lock.Lock()
-	clients[c] = true
-	lock.Unlock()
+	if len(peers) >= 2 {
+		log.Println("Max peers connected, rejecting new connection")
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"error":"Max peers connected"}`))
+		return
+	}
 
-	go func() {
-		for msg := range c.send {
-			err := conn.WriteMessage(websocket.TextMessage, msg)
-			if err != nil {
-				log.Println("Write Error:", err)
-				break
-			}
-		}
-	}()
+	peers = append(peers, conn)
+	log.Println("New peer connected:", len(peers))
 
 	for {
-		_, msg, err := conn.ReadMessage()
+		mt, message, err := conn.ReadMessage()
 		if err != nil {
-			log.Println("Read Error:", err)
+			log.Println("Read error:", err)
 			break
 		}
 
-		lock.Lock()
-		for cli := range clients {
-			if cli != c {
-				cli.send <- msg
+		for _, peer := range peers {
+			if peer != conn {
+				err = peer.WriteMessage(mt, message)
+				if err != nil {
+					log.Println("Write error:", err)
+				}
 			}
 		}
-		lock.Unlock()
 	}
 
-	lock.Lock()
-	delete(clients, c)
-	close(c.send)
-	lock.Unlock()
-}
-
-func main() {
-	http.HandleFunc("/ws", handleConnections)
-	fs := http.FileServer(http.Dir("./frontend"))
-	http.Handle("/", fs)
-
-	log.Println("Server started at :8080")
-	err := http.ListenAndServe(":8080", nil)
-	if err != nil {
-		log.Fatal("ListenAndServe: ", err)
+	for i, peer := range peers {
+		if peer == conn {
+			peers = append(peers[:i], peers[i+1:]...)
+			break
+		}
 	}
+	log.Println("Peer disconnected:", len(peers))
 }
