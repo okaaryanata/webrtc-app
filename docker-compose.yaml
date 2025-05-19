@@ -1,0 +1,16 @@
+version: "3"
+services:
+  webrtc-call:
+    build: .
+    ports:
+      - "8080:8080"
+
+  # coturn:
+  #   image: coturn/coturn:latest
+  #   container_name: coturn
+  #   command: ["turnserver", "-c", "/etc/turnserver.conf"]
+  #   volumes:
+  #     - ./turnserver.conf:/etc/turnserver.conf
+  #   ports:
+  #     - "3478:3478"
+  #     - "3478:3478/udp"
